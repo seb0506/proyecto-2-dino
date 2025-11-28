@@ -7,7 +7,7 @@ from enum import Enum, auto
 from typing import List, Tuple
 
 import pygame
-
+from sprite_manager import SpriteManager
 
 class Action(Enum):
     NONE = 0        # No hacer nada (acción neutra)
@@ -244,6 +244,7 @@ class ObstacleManager:
     def set_difficulty(self, difficulty: float):
         # Ajusta la dificultad dentro del rango permitido [min_difficulty, 1.0]
         self.difficulty = max(self.cfg.min_difficulty, min(1.0, difficulty))
+        
     def update(self, dt: float, speed: float):
         # Mueve obstáculos existentes y decide nuevos spawns según la dificultad
         self.elapsed += dt
@@ -508,6 +509,7 @@ class Game:
         self.episodes = episodes
         self.rng = rng or random.Random()         # Generador de aleatoriedad (permite reproducibilidad)
         self.fast = fast                          # Modo rápido (sin limitación de FPS)
+        self.animation_time = 0.0                 #   Para animaciones
 
         # Configuración para ejecución sin ventana (modo evaluación)
         if headless:
@@ -528,6 +530,7 @@ class Game:
         # Inicializa agentes: DP y política random
         self.agent = DPAgent(cfg)
         self.random_policy = RandomPolicy()
+        self.sprite_manager = SpriteManager()  #   Gestor de sprites para gráficos mejorados
 
 
     def run(self):
@@ -569,6 +572,7 @@ class Game:
                 dt = self.clock.tick(60) / 1000.0         # Limita a 60 FPS
 
             t += dt
+            self.animation_time += dt  #   Actualizar tiempo de animación para sprites
 
             # Actualización de dificultad creciente con el tiempo
             difficulty = min(1.0, self.cfg.min_difficulty + t / self.cfg.ramp_time)
@@ -622,6 +626,20 @@ class Game:
         # Retorna puntaje total y duración del episodio
         return score, t
 
+    def _get_dino_sprite(self, player: Player) -> pygame.Surface:
+        """  Obtiene el sprite correcto del dinosaurio según su estado"""
+        if player.state == PlayerState.JUMP:
+            # Saltando - usar dino con patas normales (sprite estático)
+            return self.sprite_manager.get_sprite('dino_run1')
+        elif player.state == PlayerState.DUCK:
+            # Agachado - alternar entre los 2 sprites de agachado
+            frame = int(self.animation_time * 10) % 2  # Cambia cada 0.1 segundos
+            return self.sprite_manager.get_sprite(f'dino_duck{frame + 1}')
+        else:
+            # Corriendo - alternar entre los 3 sprites de carrera
+            frame = int(self.animation_time * 10) % 3  # Cambia cada 0.1 segundos
+            return self.sprite_manager.get_sprite(f'dino_run{frame + 1}')
+
     def _render(self, player: Player, obstacles: ObstacleManager, score: float, episode_idx: int, t: float, speed: float, difficulty: float):
         # No renderiza si la ventana está oculta o inactiva (modo headless)
         if not pygame.display.get_active() and pygame.display.get_surface().get_flags() & pygame.HIDDEN:
@@ -633,16 +651,25 @@ class Game:
         # Línea del suelo
         pygame.draw.line(self.screen, GRAY, (0, self.cfg.ground_y + 2), (self.cfg.width, self.cfg.ground_y + 2), 2)
 
-        # Color del jugador según su estado
-        color = GREEN if player.state == PlayerState.RUN else ORANGE if player.state == PlayerState.DUCK else BLACK
+        #   Dibuja al jugador con sprite animado en lugar de rectángulo simple
+        dino_sprite = self._get_dino_sprite(player)
+        self.screen.blit(dino_sprite, (int(player.x), int(player.y)))
 
-        # Dibuja al jugador
-        pygame.draw.rect(self.screen, color, player.rect(), border_radius=6)
-
-        # Dibuja los obstáculos en pantalla
+        # Dibuja los obstáculos en pantalla con sprites
         for ob in obstacles.obstacles:
-            ob_color = BLACK if ob.kind == ObstacleKind.LOW else ORANGE
-            pygame.draw.rect(self.screen, ob_color, ob.rect(), border_radius=4)
+            if ob.kind == ObstacleKind.LOW:
+                #   Cactus - sprite estático
+                cactus_sprite = self.sprite_manager.get_sprite('cactus')
+                self.screen.blit(cactus_sprite, (int(ob.x), int(ob.y)))
+            elif ob.kind == ObstacleKind.MID or ob.kind == ObstacleKind.HIGH:
+                #   Pájaros - alternar entre alas arriba/abajo para animación de vuelo
+                frame = int(self.animation_time * 8) % 2  # Cambia cada 0.125 segundos
+                bird_sprite = self.sprite_manager.get_sprite('bird_up' if frame == 0 else 'bird_down')
+                self.screen.blit(bird_sprite, (int(ob.x), int(ob.y)))
+            else:
+                # Fallback: dibujar rectángulo si no hay sprite disponible
+                ob_color = BLACK if ob.kind == ObstacleKind.LOW else ORANGE
+                pygame.draw.rect(self.screen, ob_color, ob.rect(), border_radius=4)
 
         # Información de estado mostrada en pantalla
         info_lines = [
